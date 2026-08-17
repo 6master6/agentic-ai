@@ -1,0 +1,97 @@
+name: Lesson17 CI
+
+# 配合课程第 17 节实验手册 §4 ②「GitHub CI」：
+#   push 后自动跑 CRM-Assistant + financial-automation 的测试，
+#   再扫一遍有没有硬编码密钥。
+#
+# 触发策略：
+#   - push 到任意分支：lesson17 lab 4② 要求 push 即跑
+#   - pull_request 到 main：lesson17 lab 4③ PR 门禁预留
+#   - workflow_dispatch：手动重跑
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# 同一个 ref 上的快速连续 push，取消上一次未完成的 run，避免浪费 CI 资源。
+concurrency:
+  group: lesson17-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# 默认最小权限：只读仓库内容；后续步骤无显式写权限需求。
+permissions:
+  contents: read
+
+jobs:
+  test-crm-assistant:
+    name: CRM-Assistant tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: claude-code/multi-file-refactor/CRM-Assistant
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        # requirements.txt 故意为空（CRM 走标准库），但仍跑以保持流程一致。
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Sample tests
+        # CLAUDE.md 验证命令：sanity check，stdlib only，不依赖 runtime fixture。
+        run: python scripts/crm_assistant.py run-sample-tests
+
+      - name: Merge policy tests
+        # lesson17 README 验证命令：覆盖共享 FeishuClient 抽取后的合并策略。
+        # lesson17 lab 4② 的核心断言 — 抽完共享客户端后合并行为零变化。
+        run: python scripts/crm_assistant.py run-merge-policy-tests
+
+  test-financial-automation:
+    name: financial-automation tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: claude-code/multi-file-refactor/financial-automation
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Smoke tests
+        run: python -m unittest tests.test_smoke
+
+  secret-scan:
+    name: Hardcoded secret scan (multi-file-refactor/)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 需要 git ls-files / git show :<path> 看到完整 tree。
+          fetch-depth: 0
+
+      - name: Scan for hardcoded secrets
+        # 范围：git tracked 文件，限于 claude-code/multi-file-refactor/ 子树。
+        # 白名单与正则定义见脚本顶部 docstring。
+        run: python .github/lesson17-scan-secrets.py
